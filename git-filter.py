@@ -35,9 +35,9 @@ class RemoteState:
 
 
 BUILT_IN_REGEX_PATTERNS = [
-    ("GitHub token", rb"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,255}"),
-    ("GitHub fine-grained token", rb"github_pat_[A-Za-z0-9_]{80,255}"),
-    ("Stripe secret key", rb"sk_(?:test|live)_[A-Za-z0-9]{8,255}"),
+    ("GitHub token", rb"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,255}\b"),
+    ("GitHub fine-grained token", rb"\bgithub_pat_[A-Za-z0-9_]{20,500}\b"),
+    ("Stripe secret key", rb"\b(?:sk|rk)_(?:test|live)_[A-Za-z0-9_]{8,255}\b"),
 ]
 
 
@@ -222,6 +222,7 @@ def build_filter_repo_command(replacement_file: Path | None, paths: list[str]) -
     command = ["git", "filter-repo", "--force"]
     if replacement_file is not None:
         command.extend(["--replace-text", str(replacement_file)])
+        command.extend(["--replace-message", str(replacement_file)])
     for path in paths:
         command.extend(["--path", path])
     if paths:
@@ -239,10 +240,12 @@ def verify_patterns_absent(
         return True
     exact_patterns = encoded_patterns(patterns)
     regex_patterns = built_in_regex_patterns() if include_built_ins else []
+    found = False
+    if scan_commit_messages(repo, exact_patterns, regex_patterns):
+        found = True
     objects = reachable_blob_paths(repo)
     if not objects:
-        return True
-    found = False
+        return not found
     for blob, paths in objects.items():
         result = run_bytes(
             ["git", "cat-file", "blob", blob],
@@ -268,6 +271,32 @@ def verify_patterns_absent(
                     display_paths += f", ... ({len(paths)} paths)"
                 print(f"Found {label} still present in blob {blob}: {display_paths}")
     return not found
+
+
+def scan_commit_messages(
+    repo: Path,
+    exact_patterns: list[tuple[str, bytes]],
+    regex_patterns: list[tuple[str, re.Pattern[bytes]]],
+) -> bool:
+    result = run_bytes(
+        ["git", "log", "--all", "--format=%H%x00%B%x00"],
+        repo,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(result.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
+        return True
+    data = result.stdout
+    found = False
+    for _, needle in exact_patterns:
+        if needle in data:
+            found = True
+            print("Found exact pattern still present in commit messages.")
+    for label, regex in regex_patterns:
+        if regex.search(data):
+            found = True
+            print(f"Found {label} still present in commit messages.")
+    return found
 
 
 def built_in_regex_patterns() -> list[tuple[str, re.Pattern[bytes]]]:
