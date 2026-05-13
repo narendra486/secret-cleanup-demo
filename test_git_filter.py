@@ -121,6 +121,20 @@ class GitFilterTests(unittest.TestCase):
 
             self.assertTrue(any("secret.txt" in paths for paths in blobs.values()))
 
+    def test_repo_root_rejects_non_git_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(SystemExit) as error:
+                git_filter.repo_root(Path(temp))
+
+            self.assertIn("not inside a Git repository", str(error.exception))
+
+    def test_reachable_blob_paths_raises_for_non_git_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaises(RuntimeError) as error:
+                git_filter.reachable_blob_paths(Path(temp))
+
+            self.assertIn("Unable to list Git objects", str(error.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

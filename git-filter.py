@@ -158,7 +158,22 @@ def ask_yes_no(prompt: str, *, default: bool = False) -> bool:
 
 
 def repo_root(path: Path) -> Path:
-    result = run_quiet(["git", "rev-parse", "--show-toplevel"], path, capture=True)
+    if not path.exists():
+        raise SystemExit(f"Repository path does not exist: {path}")
+    if not path.is_dir():
+        raise SystemExit(f"Repository path is not a directory: {path}")
+    result = run_quiet(
+        ["git", "rev-parse", "--show-toplevel"],
+        path,
+        check=False,
+        capture=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        message = f"Repository path is not inside a Git repository: {path}"
+        if detail:
+            message += f"\n{detail}"
+        raise SystemExit(message)
     return Path(result.stdout.strip()).resolve()
 
 
@@ -413,7 +428,18 @@ def verify_paths_absent(repo: Path, paths: list[str]) -> bool:
 
 
 def reachable_blob_paths(repo: Path) -> dict[str, list[str]]:
-    result = run_quiet(["git", "rev-list", "--objects", "--all"], repo, capture=True)
+    result = run_quiet(
+        ["git", "rev-list", "--objects", "--all"],
+        repo,
+        check=False,
+        capture=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        message = f"Unable to list Git objects for repository: {repo}"
+        if detail:
+            message += f"\n{detail}"
+        raise RuntimeError(message)
     if not result.stdout.strip():
         return {}
     object_ids: list[str] = []
@@ -434,8 +460,11 @@ def reachable_blob_paths(repo: Path) -> dict[str, list[str]]:
         check=False,
     )
     if check.returncode != 0:
-        print(check.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
-        return {}
+        detail = check.stderr.decode("utf-8", errors="replace").strip()
+        message = "Unable to inspect Git object types."
+        if detail:
+            message += f"\n{detail}"
+        raise RuntimeError(message)
 
     blob_paths: dict[str, list[str]] = defaultdict(list)
     for line in check.stdout.decode("utf-8", errors="replace").splitlines():
