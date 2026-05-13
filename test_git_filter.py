@@ -20,6 +20,18 @@ def load_module():
 git_filter = load_module()
 
 
+def load_windows_module():
+    path = Path(__file__).with_name("git-filter-windows.py")
+    spec = importlib.util.spec_from_file_location("git_filter_windows", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+git_filter_windows = load_windows_module()
+
+
 class GitFilterTests(unittest.TestCase):
     def test_build_filter_repo_command_includes_messages_and_paths(self):
         command = git_filter.build_filter_repo_command(
@@ -100,6 +112,11 @@ class GitFilterTests(unittest.TestCase):
             )
 
             self.assertEqual(git_filter.choose_remote_name(repo), "upstream")
+
+    def test_windows_launcher_loads_core_module(self):
+        core = git_filter_windows.load_core()
+
+        self.assertTrue(hasattr(core, "main"))
 
     def test_prefix_replacement_file_uses_full_token_regex_not_literal_prefix(self):
         replacement_file = git_filter.write_replacements(["sk_live"], include_built_ins=False)

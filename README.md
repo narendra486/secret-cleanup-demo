@@ -27,6 +27,12 @@ PowerShell:
 py -3 git-filter.py
 ```
 
+Windows-only launcher:
+
+```powershell
+py -3 git-filter-windows.py
+```
+
 The script is compatible with Python 3.14 and works on Windows because it calls
 Git with Python argument lists instead of shell-specific Bash syntax.
 
