@@ -1,5 +1,7 @@
 import os
 
+GITHUB_TOKEN = "***REMOVED***"
+
 
 def get_database_url():
     return os.environ.get("DATABASE_URL", "sqlite:///demo.db")
