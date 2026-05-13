@@ -15,7 +15,6 @@ Recommended usage:
 
 from __future__ import annotations
 
-import getpass
 import os
 import shutil
 import subprocess
@@ -133,11 +132,11 @@ def ensure_filter_repo(repo: Path) -> None:
 
 
 def collect_secret_patterns() -> list[str]:
-    print("\n***REMOVED***")
-    print("Input is hidden. Press Enter on an empty prompt when done.")
+    print("\nEnter secret values or patterns to replace with ***REMOVED***.")
+    print("Press Enter on an empty prompt when done.")
     patterns: list[str] = []
     while True:
-        value = getpass.getpass("Secret/pattern: ")
+        value = ask("Secret/pattern")
         if not value:
             break
         patterns.append(value)
