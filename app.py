@@ -1,5 +1,7 @@
 import os
 
+PAYMENT_API_SECRET = "***REMOVED***"
+
 
 def get_database_url():
     return os.environ.get("DATABASE_URL", "sqlite:///demo.db")
