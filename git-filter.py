@@ -16,6 +16,7 @@ Recommended usage:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,13 @@ class RemoteState:
     url: str
     branch: str
     sha: str | None
+
+
+BUILT_IN_REGEX_PATTERNS = [
+    ("GitHub token", rb"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{30,255}"),
+    ("GitHub fine-grained token", rb"github_pat_[A-Za-z0-9_]{80,255}"),
+    ("Stripe secret key", rb"sk_(?:test|live)_[A-Za-z0-9]{8,255}"),
+]
 
 
 def run(
@@ -191,8 +199,8 @@ def collect_paths() -> list[str]:
     return paths
 
 
-def write_replacements(patterns: list[str]) -> Path | None:
-    if not patterns:
+def write_replacements(patterns: list[str], include_built_ins: bool) -> Path | None:
+    if not patterns and not include_built_ins:
         return None
     temp = tempfile.NamedTemporaryFile(
         mode="w",
@@ -204,6 +212,9 @@ def write_replacements(patterns: list[str]) -> Path | None:
     with temp:
         for pattern in patterns:
             temp.write(f"{pattern}\n")
+        if include_built_ins:
+            for _, pattern in BUILT_IN_REGEX_PATTERNS:
+                temp.write(f"regex:{pattern.decode('ascii')}\n")
     return Path(temp.name)
 
 
@@ -218,10 +229,16 @@ def build_filter_repo_command(replacement_file: Path | None, paths: list[str]) -
     return command
 
 
-def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
-    if not patterns:
+def verify_patterns_absent(
+    repo: Path,
+    patterns: list[str],
+    *,
+    include_built_ins: bool,
+) -> bool:
+    if not patterns and not include_built_ins:
         return True
-    pattern_bytes = encoded_patterns(patterns)
+    exact_patterns = encoded_patterns(patterns)
+    regex_patterns = built_in_regex_patterns() if include_built_ins else []
     objects = reachable_blob_paths(repo)
     if not objects:
         return True
@@ -236,14 +253,25 @@ def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
             print(result.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
             return False
         data = result.stdout
-        for pattern, needle in pattern_bytes:
+        for pattern, needle in exact_patterns:
             if needle in data:
                 found = True
                 display_paths = ", ".join(paths[:5])
                 if len(paths) > 5:
                     display_paths += f", ... ({len(paths)} paths)"
                 print(f"Found pattern still present in blob {blob}: {display_paths}")
+        for label, regex in regex_patterns:
+            if regex.search(data):
+                found = True
+                display_paths = ", ".join(paths[:5])
+                if len(paths) > 5:
+                    display_paths += f", ... ({len(paths)} paths)"
+                print(f"Found {label} still present in blob {blob}: {display_paths}")
     return not found
+
+
+def built_in_regex_patterns() -> list[tuple[str, re.Pattern[bytes]]]:
+    return [(label, re.compile(pattern)) for label, pattern in BUILT_IN_REGEX_PATTERNS]
 
 
 def encoded_patterns(patterns: list[str]) -> list[tuple[str, bytes]]:
@@ -348,27 +376,33 @@ def main() -> int:
 
     patterns = collect_secret_patterns()
     paths = collect_paths()
-    if not patterns and not paths:
+    include_built_ins = True
+    if not patterns and not paths and not include_built_ins:
         raise SystemExit("Nothing to remove. Add at least one secret pattern or path.")
 
     print("\nAbout to rewrite Git history.")
     print(f"Secret patterns: {len(patterns)}")
+    print("Built-in token formats: GitHub tokens, Stripe sk_test/sk_live")
     print(f"Paths to remove: {', '.join(paths) if paths else 'none'}")
     warn_missing_paths(repo, paths)
     if not ask_yes_no("Continue with git filter-repo?", default=False):
         raise SystemExit("Aborted before rewriting history.")
 
-    replacement_file = write_replacements(patterns)
+    replacement_file = write_replacements(patterns, include_built_ins)
     try:
         command = build_filter_repo_command(replacement_file, paths)
-        print("Running git filter-repo cleanup...")
+        print("Running git filter-repo cleanup...", flush=True)
         run_quiet(command, repo)
     finally:
         if replacement_file is not None:
             replacement_file.unlink(missing_ok=True)
 
     print("\nVerification: searching all reachable commits.")
-    patterns_absent = verify_patterns_absent(repo, patterns)
+    patterns_absent = verify_patterns_absent(
+        repo,
+        patterns,
+        include_built_ins=include_built_ins,
+    )
     paths_absent = verify_paths_absent(repo, paths)
     if not patterns_absent:
         print("One or more patterns are still present. Review output before pushing.")
@@ -376,7 +410,7 @@ def main() -> int:
     if not paths_absent:
         print("One or more removed paths are still present. Review output before pushing.")
         return 2
-    print("No provided secret patterns or removed paths were found in reachable history.")
+    print("No matching secret patterns or removed paths were found in reachable history.")
 
     if remote and ask_yes_no("Force-push rewritten history to GitHub/remote?", default=False):
         push_rewritten_history(repo, remote)
