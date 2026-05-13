@@ -89,12 +89,12 @@ def ask_yes_no(prompt: str, *, default: bool = False) -> bool:
 
 
 def repo_root(path: Path) -> Path:
-    result = run(["git", "rev-parse", "--show-toplevel"], path, capture=True)
+    result = run_quiet(["git", "rev-parse", "--show-toplevel"], path, capture=True)
     return Path(result.stdout.strip()).resolve()
 
 
 def current_branch(repo: Path) -> str:
-    result = run(["git", "branch", "--show-current"], repo, capture=True)
+    result = run_quiet(["git", "branch", "--show-current"], repo, capture=True)
     branch = result.stdout.strip()
     if not branch:
         raise RuntimeError("Detached HEAD is not supported by this script.")
@@ -102,14 +102,14 @@ def current_branch(repo: Path) -> str:
 
 
 def remote_url(repo: Path, remote: str) -> str | None:
-    result = run(["git", "remote", "get-url", remote], repo, check=False, capture=True)
+    result = run_quiet(["git", "remote", "get-url", remote], repo, check=False, capture=True)
     if result.returncode != 0:
         return None
     return result.stdout.strip()
 
 
 def remote_branch_sha(repo: Path, remote: str, branch: str) -> str | None:
-    result = run(
+    result = run_quiet(
         ["git", "ls-remote", remote, f"refs/heads/{branch}"],
         repo,
         check=False,
@@ -121,7 +121,7 @@ def remote_branch_sha(repo: Path, remote: str, branch: str) -> str | None:
 
 
 def ensure_clean_worktree(repo: Path) -> None:
-    result = run(["git", "status", "--porcelain"], repo, capture=True)
+    result = run_quiet(["git", "status", "--porcelain"], repo, capture=True)
     if result.stdout.strip():
         print(result.stdout)
         if not ask_yes_no("Worktree is dirty. Continue anyway?", default=False):
@@ -129,9 +129,8 @@ def ensure_clean_worktree(repo: Path) -> None:
 
 
 def ensure_filter_repo(repo: Path) -> None:
-    result = run(["git", "filter-repo", "--version"], repo, check=False, capture=True)
+    result = run_quiet(["git", "filter-repo", "--version"], repo, check=False, capture=True)
     if result.returncode == 0:
-        print(result.stdout.strip())
         return
     raise SystemExit(
         "git-filter-repo was not found.\n"
@@ -206,7 +205,7 @@ def build_filter_repo_command(replacement_file: Path | None, paths: list[str]) -
 def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
     if not patterns:
         return True
-    revs = run(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
     found = False
     for pattern in patterns:
         for rev in revs:
@@ -226,7 +225,7 @@ def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
 def warn_missing_paths(repo: Path, paths: list[str]) -> None:
     if not paths:
         return
-    revs = run(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
     for path in paths:
         found = False
         for rev in revs:
@@ -247,20 +246,20 @@ def restore_remote(repo: Path, remote: RemoteState) -> None:
     if remote_url(repo, remote.name) == remote.url:
         return
     if remote_url(repo, remote.name) is not None:
-        run(["git", "remote", "remove", remote.name], repo)
-    run(["git", "remote", "add", remote.name, remote.url], repo)
+        run_quiet(["git", "remote", "remove", remote.name], repo)
+    run_quiet(["git", "remote", "add", remote.name, remote.url], repo)
 
 
 def push_rewritten_history(repo: Path, remote: RemoteState) -> None:
     restore_remote(repo, remote)
     if remote.sha:
         lease = f"refs/heads/{remote.branch}:{remote.sha}"
-        run(
+        run_quiet(
             ["git", "push", f"--force-with-lease={lease}", "-u", remote.name, remote.branch],
             repo,
         )
     else:
-        run(["git", "push", "--force", "-u", remote.name, remote.branch], repo)
+        run_quiet(["git", "push", "--force", "-u", remote.name, remote.branch], repo)
 
 
 def main() -> int:
@@ -271,7 +270,6 @@ def main() -> int:
     repo = repo_root(Path(repo_input).expanduser().resolve())
     branch = current_branch(repo)
     print(f"Repository: {repo}")
-    print(f"Branch: {branch}")
 
     ensure_clean_worktree(repo)
     ensure_filter_repo(repo)
@@ -286,8 +284,7 @@ def main() -> int:
             branch=branch,
             sha=remote_branch_sha(repo, remote_name, branch),
         )
-        print(f"Remote: {remote.name} -> {remote.url}")
-        print(f"Remote branch SHA: {remote.sha or 'not found'}")
+        print(f"Remote: {remote.name}")
     else:
         print(f"Remote {remote_name!r} not found; push step will be skipped.")
 
@@ -306,7 +303,7 @@ def main() -> int:
     replacement_file = write_replacements(patterns)
     try:
         command = build_filter_repo_command(replacement_file, paths)
-        print("+ git filter-repo --force [redacted cleanup arguments]")
+        print("Running git filter-repo cleanup...")
         run_quiet(command, repo)
     finally:
         if replacement_file is not None:
