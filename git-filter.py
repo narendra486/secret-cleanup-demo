@@ -40,7 +40,7 @@ def run(
     check: bool = True,
     capture: bool = False,
 ) -> subprocess.CompletedProcess[str]:
-    print(f"+ {' '.join(args)}")
+    print(f"+ {format_command(args)}")
     return subprocess.run(
         args,
         cwd=cwd,
@@ -48,6 +48,12 @@ def run(
         text=True,
         capture_output=capture,
     )
+
+
+def format_command(args: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(args)
+    return " ".join(args)
 
 
 def ask(prompt: str, default: str | None = None) -> str:
