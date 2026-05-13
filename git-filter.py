@@ -34,6 +34,12 @@ class RemoteState:
     sha: str | None
 
 
+@dataclass(frozen=True)
+class FilterRepoCommand:
+    args: list[str]
+    display_name: str
+
+
 BUILT_IN_REGEX_PATTERNS = [
     ("GitHub token", rb"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,255}"),
     ("GitHub fine-grained token", rb"github_pat_[A-Za-z0-9_]{20,500}"),
@@ -173,13 +179,21 @@ def ensure_clean_worktree(repo: Path) -> None:
             raise SystemExit("Aborted because the worktree is dirty.")
 
 
-def ensure_filter_repo(repo: Path) -> None:
+def detect_filter_repo(repo: Path) -> FilterRepoCommand:
     result = run_quiet(["git", "filter-repo", "--version"], repo, check=False, capture=True)
     if result.returncode == 0:
-        return
+        return FilterRepoCommand(args=["git", "filter-repo"], display_name="git filter-repo")
+    result = run_quiet(["git-filter-repo", "--version"], repo, check=False, capture=True)
+    if result.returncode == 0:
+        return FilterRepoCommand(args=["git-filter-repo"], display_name="git-filter-repo")
     raise SystemExit(
         "git-filter-repo was not found.\n"
-        "Install it first, for example:\n"
+        "Install it first and restart your shell.\n"
+        "Windows PowerShell:\n"
+        "  py -m pip install --user pipx\n"
+        "  py -m pipx ensurepath\n"
+        "  pipx install git-filter-repo\n"
+        "macOS/Linux:\n"
         "  python3 -m pipx install git-filter-repo\n"
         "or see https://github.com/newren/git-filter-repo"
     )
@@ -243,8 +257,12 @@ def write_replacements(patterns: list[str], include_built_ins: bool) -> Path | N
     return Path(temp.name)
 
 
-def build_filter_repo_command(replacement_file: Path | None, paths: list[str]) -> list[str]:
-    command = ["git", "filter-repo", "--force"]
+def build_filter_repo_command(
+    filter_repo: FilterRepoCommand,
+    replacement_file: Path | None,
+    paths: list[str],
+) -> list[str]:
+    command = [*filter_repo.args, "--force"]
     if replacement_file is not None:
         command.extend(["--replace-text", str(replacement_file)])
         command.extend(["--replace-message", str(replacement_file)])
@@ -437,7 +455,7 @@ def main() -> int:
     print(f"Repository: {repo}")
 
     ensure_clean_worktree(repo)
-    ensure_filter_repo(repo)
+    filter_repo = detect_filter_repo(repo)
 
     remote_name = ask("Remote name", "origin")
     url = remote_url(repo, remote_name)
@@ -469,8 +487,8 @@ def main() -> int:
 
     replacement_file = write_replacements(patterns, include_built_ins)
     try:
-        command = build_filter_repo_command(replacement_file, paths)
-        print("Running git filter-repo cleanup...", flush=True)
+        command = build_filter_repo_command(filter_repo, replacement_file, paths)
+        print(f"Running {filter_repo.display_name} cleanup...", flush=True)
         run_quiet(command, repo)
     finally:
         if replacement_file is not None:
