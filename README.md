@@ -33,6 +33,15 @@ Windows-only launcher:
 py -3 git-filter-windows.py
 ```
 
+Windows standalone script:
+
+```powershell
+py -3 git-filter-windows-full.py
+```
+
+Use `git-filter-windows-full.py` when you want a single Windows file without
+depending on the launcher importing `git-filter.py`.
+
 The script is compatible with Python 3.14 and works on Windows because it calls
 Git with Python argument lists instead of shell-specific Bash syntax.
 
