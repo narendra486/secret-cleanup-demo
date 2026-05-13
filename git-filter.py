@@ -490,6 +490,9 @@ def main() -> int:
         command = build_filter_repo_command(filter_repo, replacement_file, paths)
         print(f"Running {filter_repo.display_name} cleanup...", flush=True)
         run_quiet(command, repo)
+        if remote:
+            restore_remote(repo, remote)
+            print(f"Remote restored: {remote.name}")
     finally:
         if replacement_file is not None:
             replacement_file.unlink(missing_ok=True)
