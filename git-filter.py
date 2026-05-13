@@ -35,10 +35,23 @@ class RemoteState:
 
 
 BUILT_IN_REGEX_PATTERNS = [
-    ("GitHub token", rb"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,255}\b"),
-    ("GitHub fine-grained token", rb"\bgithub_pat_[A-Za-z0-9_]{20,500}\b"),
-    ("Stripe secret key", rb"\b(?:sk|rk)_(?:test|live)_[A-Za-z0-9_]{8,255}\b"),
+    ("GitHub token", rb"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,255}"),
+    ("GitHub fine-grained token", rb"github_pat_[A-Za-z0-9_]{20,500}"),
+    ("Stripe secret key", rb"(?:sk|rk)_(?:test|live)_[A-Za-z0-9_]{8,255}"),
 ]
+
+PREFIX_REGEX_PATTERNS = {
+    "ghp": ("GitHub ghp token", rb"ghp_[A-Za-z0-9_]{20,255}"),
+    "gho": ("GitHub gho token", rb"gho_[A-Za-z0-9_]{20,255}"),
+    "ghu": ("GitHub ghu token", rb"ghu_[A-Za-z0-9_]{20,255}"),
+    "ghs": ("GitHub ghs token", rb"ghs_[A-Za-z0-9_]{20,255}"),
+    "ghr": ("GitHub ghr token", rb"ghr_[A-Za-z0-9_]{20,255}"),
+    "github_pat": ("GitHub fine-grained token", rb"github_pat_[A-Za-z0-9_]{20,500}"),
+    "sk_test": ("Stripe test secret key", rb"sk_test_[A-Za-z0-9_]{8,255}"),
+    "sk_live": ("Stripe live secret key", rb"sk_live_[A-Za-z0-9_]{8,255}"),
+    "rk_test": ("Stripe test restricted key", rb"rk_test_[A-Za-z0-9_]{8,255}"),
+    "rk_live": ("Stripe live restricted key", rb"rk_live_[A-Za-z0-9_]{8,255}"),
+}
 
 
 def run(
@@ -91,7 +104,11 @@ def format_command(args: list[str]) -> str:
 
 def ask(prompt: str, default: str | None = None) -> str:
     suffix = f" [{default}]" if default else ""
-    value = input(f"{prompt}{suffix}: ").strip()
+    try:
+        value = input(f"{prompt}{suffix}: ").strip()
+    except EOFError:
+        print()
+        value = ""
     if value:
         return value
     if default is not None:
@@ -102,7 +119,11 @@ def ask(prompt: str, default: str | None = None) -> str:
 def ask_yes_no(prompt: str, *, default: bool = False) -> bool:
     default_text = "Y/n" if default else "y/N"
     while True:
-        value = input(f"{prompt} [{default_text}]: ").strip().lower()
+        try:
+            value = input(f"{prompt} [{default_text}]: ").strip().lower()
+        except EOFError:
+            print()
+            return default
         if not value:
             return default
         if value in {"y", "yes"}:
@@ -210,7 +231,11 @@ def write_replacements(patterns: list[str], include_built_ins: bool) -> Path | N
         delete=False,
     )
     with temp:
+        for _, pattern in raw_prefix_regex_patterns(patterns):
+            temp.write(f"regex:{pattern.decode('ascii')}\n")
         for pattern in patterns:
+            if is_known_token_prefix(pattern):
+                continue
             temp.write(f"{pattern}\n")
         if include_built_ins:
             for _, pattern in BUILT_IN_REGEX_PATTERNS:
@@ -239,7 +264,9 @@ def verify_patterns_absent(
     if not patterns and not include_built_ins:
         return True
     exact_patterns = encoded_patterns(patterns)
-    regex_patterns = built_in_regex_patterns() if include_built_ins else []
+    regex_patterns = prefix_regex_patterns(patterns)
+    if include_built_ins:
+        regex_patterns.extend(built_in_regex_patterns())
     found = False
     if scan_commit_messages(repo, exact_patterns, regex_patterns):
         found = True
@@ -301,6 +328,29 @@ def scan_commit_messages(
 
 def built_in_regex_patterns() -> list[tuple[str, re.Pattern[bytes]]]:
     return [(label, re.compile(pattern)) for label, pattern in BUILT_IN_REGEX_PATTERNS]
+
+
+def prefix_regex_patterns(patterns: list[str]) -> list[tuple[str, re.Pattern[bytes]]]:
+    return [(label, re.compile(regex)) for label, regex in raw_prefix_regex_patterns(patterns)]
+
+
+def raw_prefix_regex_patterns(patterns: list[str]) -> list[tuple[str, bytes]]:
+    expanded: list[tuple[str, bytes]] = []
+    seen: set[bytes] = set()
+    for pattern in patterns:
+        key = pattern.rstrip("_").lower()
+        if key not in PREFIX_REGEX_PATTERNS:
+            continue
+        label, regex = PREFIX_REGEX_PATTERNS[key]
+        if regex in seen:
+            continue
+        seen.add(regex)
+        expanded.append((label, regex))
+    return expanded
+
+
+def is_known_token_prefix(pattern: str) -> bool:
+    return pattern.rstrip("_").lower() in PREFIX_REGEX_PATTERNS
 
 
 def encoded_patterns(patterns: list[str]) -> list[tuple[str, bytes]]:
