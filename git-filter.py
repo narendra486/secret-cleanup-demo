@@ -60,6 +60,8 @@ PREFIX_REGEX_PATTERNS = {
     "rk_live": ("Stripe live restricted key", rb"rk_live_[A-Za-z0-9_]{8,255}"),
 }
 
+ENVIRONMENT_BRANCHES = ["dev", "staging", "main", "prod"]
+
 
 def run(
     args: list[str],
@@ -202,6 +204,15 @@ def remote_branch_sha(repo: Path, remote: str, branch: str) -> str | None:
     if result.returncode != 0 or not result.stdout.strip():
         return None
     return result.stdout.split()[0]
+
+
+def local_branch_exists(repo: Path, branch: str) -> bool:
+    result = run_quiet(
+        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+        repo,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def remote_names(repo: Path) -> list[str]:
@@ -582,6 +593,39 @@ def push_rewritten_history(repo: Path, remote: RemoteState) -> None:
         run_quiet(["git", "push", "--force", "-u", remote.name, remote.branch], repo)
 
 
+def push_rewritten_branches(repo: Path, remote: RemoteState, branches: list[str]) -> None:
+    restore_remote(repo, remote)
+    pushed: list[str] = []
+    skipped: list[str] = []
+    for branch in branches:
+        if not local_branch_exists(repo, branch):
+            skipped.append(branch)
+            continue
+        sha = remote_branch_sha(repo, remote.name, branch)
+        if sha:
+            lease = f"refs/heads/{branch}:{sha}"
+            run_quiet(
+                ["git", "push", f"--force-with-lease={lease}", remote.name, f"{branch}:{branch}"],
+                repo,
+            )
+        else:
+            run_quiet(["git", "push", "--force", remote.name, f"{branch}:{branch}"], repo)
+        pushed.append(branch)
+    if pushed:
+        print(f"Rewritten branches pushed: {', '.join(pushed)}")
+    if skipped:
+        print(f"Skipped missing local branches: {', '.join(skipped)}")
+
+
+def choose_push_branches(repo: Path, current: str) -> list[str]:
+    existing_env = [branch for branch in ENVIRONMENT_BRANCHES if local_branch_exists(repo, branch)]
+    if not existing_env:
+        return [current]
+    if ask_yes_no("Force-push dev/staging/main/prod branches if present?", default=False):
+        return existing_env
+    return [current]
+
+
 def main() -> int:
     if shutil.which("git") is None:
         raise SystemExit("git was not found on PATH.")
@@ -650,7 +694,11 @@ def main() -> int:
     print("No matching secret patterns or removed paths were found in reachable history.")
 
     if remote and ask_yes_no("Force-push rewritten history to GitHub/remote?", default=False):
-        push_rewritten_history(repo, remote)
+        branches = choose_push_branches(repo, branch)
+        if branches == [branch]:
+            push_rewritten_history(repo, remote)
+        else:
+            push_rewritten_branches(repo, remote, branches)
         print("Rewritten history pushed.")
         print("Ask collaborators to re-clone or hard-reset to the rewritten branch.")
     else:

@@ -113,6 +113,30 @@ class GitFilterTests(unittest.TestCase):
 
             self.assertEqual(git_filter.choose_remote_name(repo), "upstream")
 
+    def test_local_branch_exists(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            (repo / "file.txt").write_text("content\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "branch", "dev"], cwd=repo, check=True, capture_output=True)
+
+            self.assertTrue(git_filter.local_branch_exists(repo, "dev"))
+            self.assertFalse(git_filter.local_branch_exists(repo, "prod"))
+
     def test_windows_launcher_loads_core_module(self):
         core = git_filter_windows.load_core()
 
