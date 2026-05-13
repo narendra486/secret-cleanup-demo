@@ -9,6 +9,6 @@ This repository demonstrates removing committed secrets from Git history.
 The first commit intentionally contains fake secrets:
 
 - `.env`
-- `FAKE_API_TOKEN=***REMOVED***`
+- `FAKE_API_TOKEN=<removed from working tree>`
 
 The history is later cleaned with `git filter-repo`.
