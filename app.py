@@ -1,5 +1,7 @@
 import os
 
+STRIPE_SECRET_KEY = "***REMOVED***"
+
 
 def get_database_url():
     return os.environ.get("DATABASE_URL", "sqlite:///demo.db")
