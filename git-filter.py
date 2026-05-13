@@ -206,19 +206,37 @@ def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
     if not patterns:
         return True
     revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    if not revs:
+        return True
     found = False
     for pattern in patterns:
-        for rev in revs:
-            result = subprocess.run(
-                ["git", "grep", "-F", "-n", "--", pattern, rev],
-                cwd=repo,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if result.returncode == 0:
+        result = run_quiet(
+            ["git", "grep", "-I", "-F", "-n", "--", pattern, *revs],
+            repo,
+            check=False,
+            capture=True,
+        )
+        if result.returncode == 0:
+            found = True
+            print(result.stdout, end="")
+        elif result.returncode not in {1, 128}:
+            print(result.stderr, end="", file=sys.stderr)
+            found = True
+    return not found
+
+
+def verify_paths_absent(repo: Path, paths: list[str]) -> bool:
+    if not paths:
+        return True
+    revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    found = False
+    for rev in revs:
+        tree = run_quiet(["git", "ls-tree", "-r", "--name-only", rev], repo, capture=True)
+        names = set(tree.stdout.splitlines())
+        for path in paths:
+            if path in names:
                 found = True
-                print(result.stdout, end="")
+                print(f"{rev}:{path}")
     return not found
 
 
@@ -310,11 +328,15 @@ def main() -> int:
             replacement_file.unlink(missing_ok=True)
 
     print("\nVerification: searching all reachable commits.")
-    if verify_patterns_absent(repo, patterns):
-        print("No provided secret patterns were found in reachable history.")
-    else:
+    patterns_absent = verify_patterns_absent(repo, patterns)
+    paths_absent = verify_paths_absent(repo, paths)
+    if not patterns_absent:
         print("One or more patterns are still present. Review output before pushing.")
         return 2
+    if not paths_absent:
+        print("One or more removed paths are still present. Review output before pushing.")
+        return 2
+    print("No provided secret patterns or removed paths were found in reachable history.")
 
     if remote and ask_yes_no("Force-push rewritten history to GitHub/remote?", default=False):
         push_rewritten_history(repo, remote)
