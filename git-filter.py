@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,6 +57,21 @@ def run_quiet(
         check=check,
         text=True,
         capture_output=capture,
+    )
+
+
+def run_bytes(
+    args: list[str],
+    cwd: Path,
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        check=check,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
 
 
@@ -205,58 +221,82 @@ def build_filter_repo_command(replacement_file: Path | None, paths: list[str]) -
 def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
     if not patterns:
         return True
-    revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
-    if not revs:
+    pattern_bytes = encoded_patterns(patterns)
+    objects = reachable_blob_paths(repo)
+    if not objects:
         return True
     found = False
-    for pattern in patterns:
-        result = run_quiet(
-            ["git", "grep", "-I", "-F", "-n", "--", pattern, *revs],
+    for blob, paths in objects.items():
+        result = run_bytes(
+            ["git", "cat-file", "blob", blob],
             repo,
             check=False,
-            capture=True,
         )
-        if result.returncode == 0:
-            found = True
-            print(result.stdout, end="")
-        elif result.returncode not in {1, 128}:
-            print(result.stderr, end="", file=sys.stderr)
-            found = True
+        if result.returncode != 0:
+            print(result.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
+            return False
+        data = result.stdout
+        for pattern, needle in pattern_bytes:
+            if needle in data:
+                found = True
+                display_paths = ", ".join(paths[:5])
+                if len(paths) > 5:
+                    display_paths += f", ... ({len(paths)} paths)"
+                print(f"Found pattern still present in blob {blob}: {display_paths}")
     return not found
+
+
+def encoded_patterns(patterns: list[str]) -> list[tuple[str, bytes]]:
+    encoded: list[tuple[str, bytes]] = []
+    seen: set[bytes] = set()
+    for pattern in patterns:
+        for encoding in ("utf-8", "utf-16-le", "utf-16-be"):
+            needle = pattern.encode(encoding)
+            if needle and needle not in seen:
+                seen.add(needle)
+                encoded.append((pattern, needle))
+    return encoded
 
 
 def verify_paths_absent(repo: Path, paths: list[str]) -> bool:
     if not paths:
         return True
-    revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    wanted = set(paths)
+    objects = reachable_blob_paths(repo)
     found = False
-    for rev in revs:
-        tree = run_quiet(["git", "ls-tree", "-r", "--name-only", rev], repo, capture=True)
-        names = set(tree.stdout.splitlines())
-        for path in paths:
-            if path in names:
+    for blob, blob_paths in objects.items():
+        for path in blob_paths:
+            if path in wanted:
                 found = True
-                print(f"{rev}:{path}")
+                print(f"Found path still present in blob {blob}: {path}")
     return not found
+
+
+def reachable_blob_paths(repo: Path) -> dict[str, list[str]]:
+    result = run_quiet(["git", "rev-list", "--objects", "--all"], repo, capture=True)
+    blob_paths: dict[str, list[str]] = defaultdict(list)
+    for line in result.stdout.splitlines():
+        if not line:
+            continue
+        oid, _, path = line.partition(" ")
+        if not path:
+            continue
+        kind = run_quiet(["git", "cat-file", "-t", oid], repo, capture=True)
+        if kind.stdout.strip() == "blob":
+            blob_paths[oid].append(path)
+    return dict(blob_paths)
 
 
 def warn_missing_paths(repo: Path, paths: list[str]) -> None:
     if not paths:
         return
-    revs = run_quiet(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    existing_paths = {
+        path
+        for blob_paths in reachable_blob_paths(repo).values()
+        for path in blob_paths
+    }
     for path in paths:
-        found = False
-        for rev in revs:
-            result = run_quiet(
-                ["git", "cat-file", "-e", f"{rev}:{path}"],
-                repo,
-                check=False,
-                capture=True,
-            )
-            if result.returncode == 0:
-                found = True
-                break
-        if not found:
+        if path not in existing_paths:
             print(f"Warning: path was not found in reachable history: {path}")
 
 
