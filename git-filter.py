@@ -24,6 +24,7 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,23 @@ def run_bytes(
     return subprocess.run(
         args,
         cwd=cwd,
+        check=check,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def run_bytes_input(
+    args: list[str],
+    cwd: Path,
+    input_data: bytes,
+    *,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        args,
+        cwd=cwd,
+        input=input_data,
         check=check,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -291,16 +309,10 @@ def verify_patterns_absent(
     objects = reachable_blob_paths(repo)
     if not objects:
         return not found
-    for blob, paths in objects.items():
-        result = run_bytes(
-            ["git", "cat-file", "blob", blob],
-            repo,
-            check=False,
-        )
-        if result.returncode != 0:
-            print(result.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
-            return False
-        data = result.stdout
+    print(f"Scanning {len(objects)} reachable blobs...", flush=True)
+
+    def scan_blob(blob: str, paths: list[str], data: bytes) -> None:
+        nonlocal found
         for pattern, needle in exact_patterns:
             if needle in data:
                 found = True
@@ -315,6 +327,9 @@ def verify_patterns_absent(
                 if len(paths) > 5:
                     display_paths += f", ... ({len(paths)} paths)"
                 print(f"Found {label} still present in blob {blob}: {display_paths}")
+
+    if not for_each_blob(repo, objects, scan_blob):
+        return False
     return not found
 
 
@@ -399,17 +414,85 @@ def verify_paths_absent(repo: Path, paths: list[str]) -> bool:
 
 def reachable_blob_paths(repo: Path) -> dict[str, list[str]]:
     result = run_quiet(["git", "rev-list", "--objects", "--all"], repo, capture=True)
-    blob_paths: dict[str, list[str]] = defaultdict(list)
+    if not result.stdout.strip():
+        return {}
+    object_ids: list[str] = []
+    object_paths: dict[str, list[str]] = defaultdict(list)
     for line in result.stdout.splitlines():
         if not line:
             continue
         oid, _, path = line.partition(" ")
-        if not path:
+        object_ids.append(oid)
+        if path:
+            object_paths[oid].append(path)
+
+    check_input = ("\n".join(object_ids) + "\n").encode("ascii")
+    check = run_bytes_input(
+        ["git", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        repo,
+        check_input,
+        check=False,
+    )
+    if check.returncode != 0:
+        print(check.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
+        return {}
+
+    blob_paths: dict[str, list[str]] = defaultdict(list)
+    for line in check.stdout.decode("utf-8", errors="replace").splitlines():
+        if not line:
             continue
-        kind = run_quiet(["git", "cat-file", "-t", oid], repo, capture=True)
-        if kind.stdout.strip() == "blob":
-            blob_paths[oid].append(path)
+        oid, _, kind = line.partition(" ")
+        if kind == "blob":
+            blob_paths[oid].extend(object_paths.get(oid, []))
     return dict(blob_paths)
+
+
+def for_each_blob(
+    repo: Path,
+    objects: dict[str, list[str]],
+    callback: Callable[[str, list[str], bytes], None],
+) -> bool:
+    if not objects:
+        return True
+    batch_input = ("\n".join(objects) + "\n").encode("ascii")
+    result = run_bytes_input(
+        ["git", "cat-file", "--batch"],
+        repo,
+        batch_input,
+        check=False,
+    )
+    if result.returncode != 0:
+        print(result.stderr.decode("utf-8", errors="replace"), end="", file=sys.stderr)
+        return False
+
+    data = result.stdout
+    index = 0
+    total = len(data)
+    while index < total:
+        header_end = data.find(b"\n", index)
+        if header_end == -1:
+            print("Unexpected git cat-file batch output.", file=sys.stderr)
+            return False
+        header = data[index:header_end].decode("ascii", errors="replace")
+        parts = header.split()
+        if len(parts) < 3:
+            print(f"Unexpected git cat-file header: {header}", file=sys.stderr)
+            return False
+        oid, kind, size_text = parts[0], parts[1], parts[2]
+        try:
+            size = int(size_text)
+        except ValueError:
+            print(f"Unexpected git cat-file size: {header}", file=sys.stderr)
+            return False
+        start = header_end + 1
+        end = start + size
+        if end > total:
+            print("Unexpected truncated git cat-file blob output.", file=sys.stderr)
+            return False
+        if kind == "blob":
+            callback(oid, objects.get(oid, []), data[start:end])
+        index = end + 1
+    return True
 
 
 def warn_missing_paths(repo: Path, paths: list[str]) -> None:

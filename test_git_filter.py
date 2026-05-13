@@ -92,6 +92,35 @@ class GitFilterTests(unittest.TestCase):
         self.assertIn("dummy_api_key_123456".encode("utf-16-le"), encoded)
         self.assertIn("dummy_api_key_123456".encode("utf-16-be"), encoded)
 
+    def test_reachable_blob_paths_uses_git_history(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            (repo / "secret.txt").write_text("dummy_api_key_123456\n", encoding="utf-8")
+            subprocess.run(["git", "add", "secret.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "Add secret file"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            blobs = git_filter.reachable_blob_paths(repo)
+
+            self.assertTrue(any("secret.txt" in paths for paths in blobs.values()))
+
 
 if __name__ == "__main__":
     unittest.main()
