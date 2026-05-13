@@ -621,11 +621,16 @@ def push_rewritten_branches(repo: Path, remote: RemoteState, branches: list[str]
 
 
 def choose_push_branches(repo: Path, current: str) -> list[str]:
-    existing_env = [branch for branch in ENVIRONMENT_BRANCHES if local_branch_exists(repo, branch)]
-    if not existing_env:
-        return [current]
-    if ask_yes_no("Force-push dev/staging/main/prod branches if present?", default=False):
-        return existing_env
+    selected: list[str] = []
+    for branch in ENVIRONMENT_BRANCHES:
+        if not local_branch_exists(repo, branch):
+            print(f"Skipping missing local branch: {branch}")
+            continue
+        if ask_yes_no(f"Force-push {branch}?", default=False):
+            selected.append(branch)
+    if selected:
+        return selected
+    print(f"No environment branches selected; using current branch: {current}")
     return [current]
 
 

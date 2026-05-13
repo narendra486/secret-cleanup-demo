@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import builtins
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 def load_module():
@@ -136,6 +138,53 @@ class GitFilterTests(unittest.TestCase):
 
             self.assertTrue(git_filter.local_branch_exists(repo, "dev"))
             self.assertFalse(git_filter.local_branch_exists(repo, "prod"))
+
+    def test_choose_push_branches_prompts_in_environment_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True, capture_output=True)
+            (repo / "file.txt").write_text("content\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True)
+            for branch in ("dev", "staging", "prod"):
+                subprocess.run(["git", "branch", branch], cwd=repo, check=True, capture_output=True)
+
+            prompts: list[str] = []
+
+            def fake_input(prompt: str) -> str:
+                prompts.append(prompt)
+                return "y" if "dev" in prompt or "prod" in prompt else "n"
+
+            with patch.object(builtins, "input", fake_input):
+                selected = git_filter.choose_push_branches(repo, "main")
+
+            self.assertEqual(selected, ["dev", "prod"])
+            self.assertEqual(
+                prompts,
+                [
+                    "Force-push dev? [y/N]: ",
+                    "Force-push staging? [y/N]: ",
+                    "Force-push main? [y/N]: ",
+                    "Force-push prod? [y/N]: ",
+                ],
+            )
+
+    def test_choose_push_branches_falls_back_to_current_when_none_selected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test User"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True, capture_output=True)
+            (repo / "file.txt").write_text("content\n", encoding="utf-8")
+            subprocess.run(["git", "add", "file.txt"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True)
+
+            with patch.object(builtins, "input", return_value="n"):
+                selected = git_filter.choose_push_branches(repo, "main")
+
+            self.assertEqual(selected, ["main"])
 
     def test_windows_launcher_loads_core_module(self):
         core = git_filter_windows.load_core()
