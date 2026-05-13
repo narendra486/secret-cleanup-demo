@@ -40,6 +40,16 @@ def run(
     capture: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     print(f"+ {format_command(args)}")
+    return run_quiet(args, cwd, check=check, capture=capture)
+
+
+def run_quiet(
+    args: list[str],
+    cwd: Path,
+    *,
+    check: bool = True,
+    capture: bool = False,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=cwd,
@@ -135,10 +145,15 @@ def collect_secret_patterns() -> list[str]:
     print("\nEnter secret values or patterns to replace with ***REMOVED***.")
     print("Press Enter on an empty prompt when done.")
     patterns: list[str] = []
+    seen: set[str] = set()
     while True:
         value = ask("Secret/pattern")
         if not value:
             break
+        if value in seen:
+            print("Already added; skipping duplicate.")
+            continue
+        seen.add(value)
         patterns.append(value)
     return patterns
 
@@ -147,10 +162,16 @@ def collect_paths() -> list[str]:
     print("\nEnter committed file paths to remove from all history, such as .env.")
     print("Press Enter on an empty prompt when done.")
     paths: list[str] = []
+    seen: set[str] = set()
     while True:
         value = ask("Path to remove")
         if not value:
             break
+        value = value.replace("\\", "/").lstrip("/")
+        if value in seen:
+            print("Already added; skipping duplicate.")
+            continue
+        seen.add(value)
         paths.append(value)
     return paths
 
@@ -200,6 +221,26 @@ def verify_patterns_absent(repo: Path, patterns: list[str]) -> bool:
                 found = True
                 print(result.stdout, end="")
     return not found
+
+
+def warn_missing_paths(repo: Path, paths: list[str]) -> None:
+    if not paths:
+        return
+    revs = run(["git", "rev-list", "--all"], repo, capture=True).stdout.splitlines()
+    for path in paths:
+        found = False
+        for rev in revs:
+            result = run_quiet(
+                ["git", "cat-file", "-e", f"{rev}:{path}"],
+                repo,
+                check=False,
+                capture=True,
+            )
+            if result.returncode == 0:
+                found = True
+                break
+        if not found:
+            print(f"Warning: path was not found in reachable history: {path}")
 
 
 def restore_remote(repo: Path, remote: RemoteState) -> None:
@@ -258,13 +299,15 @@ def main() -> int:
     print("\nAbout to rewrite Git history.")
     print(f"Secret patterns: {len(patterns)}")
     print(f"Paths to remove: {', '.join(paths) if paths else 'none'}")
+    warn_missing_paths(repo, paths)
     if not ask_yes_no("Continue with git filter-repo?", default=False):
         raise SystemExit("Aborted before rewriting history.")
 
     replacement_file = write_replacements(patterns)
     try:
         command = build_filter_repo_command(replacement_file, paths)
-        run(command, repo)
+        print("+ git filter-repo --force [redacted cleanup arguments]")
+        run_quiet(command, repo)
     finally:
         if replacement_file is not None:
             replacement_file.unlink(missing_ok=True)
@@ -279,6 +322,7 @@ def main() -> int:
     if remote and ask_yes_no("Force-push rewritten history to GitHub/remote?", default=False):
         push_rewritten_history(repo, remote)
         print("Rewritten history pushed.")
+        print("Ask collaborators to re-clone or hard-reset to the rewritten branch.")
     else:
         print("Push skipped.")
 
