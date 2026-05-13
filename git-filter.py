@@ -204,6 +204,31 @@ def remote_branch_sha(repo: Path, remote: str, branch: str) -> str | None:
     return result.stdout.split()[0]
 
 
+def remote_names(repo: Path) -> list[str]:
+    result = run_quiet(["git", "remote"], repo, check=False, capture=True)
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def choose_remote_name(repo: Path) -> str | None:
+    remotes = remote_names(repo)
+    if not remotes:
+        return None
+    if "origin" in remotes:
+        return "origin"
+    if len(remotes) == 1:
+        return remotes[0]
+    print(f"Available remotes: {', '.join(remotes)}")
+    while True:
+        remote_name = ask("Remote name")
+        if not remote_name:
+            return None
+        if remote_name in remotes:
+            return remote_name
+        print(f"Remote {remote_name!r} not found.")
+
+
 def ensure_clean_worktree(repo: Path) -> None:
     result = run_quiet(["git", "status", "--porcelain"], repo, capture=True)
     if result.stdout.strip():
@@ -569,10 +594,10 @@ def main() -> int:
     ensure_clean_worktree(repo)
     filter_repo = detect_filter_repo(repo)
 
-    remote_name = ask("Remote name", "origin")
-    url = remote_url(repo, remote_name)
+    remote_name = choose_remote_name(repo)
+    url = remote_url(repo, remote_name) if remote_name else None
     remote = None
-    if url:
+    if remote_name and url:
         remote = RemoteState(
             name=remote_name,
             url=url,
@@ -581,7 +606,7 @@ def main() -> int:
         )
         print(f"Remote: {remote.name}")
     else:
-        print(f"Remote {remote_name!r} not found; push step will be skipped.")
+        print("No remote found; push step will be skipped.")
 
     patterns = collect_secret_patterns()
     paths = collect_paths()

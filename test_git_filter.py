@@ -75,6 +75,32 @@ class GitFilterTests(unittest.TestCase):
 
             self.assertEqual(url, remote.url)
 
+    def test_choose_remote_name_uses_origin_without_prompt(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "remote", "add", "origin", "https://github.com/example/repo.git"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(git_filter.choose_remote_name(repo), "origin")
+
+    def test_choose_remote_name_uses_single_non_origin_remote(self):
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "remote", "add", "upstream", "https://github.com/example/repo.git"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(git_filter.choose_remote_name(repo), "upstream")
+
     def test_prefix_replacement_file_uses_full_token_regex_not_literal_prefix(self):
         replacement_file = git_filter.write_replacements(["sk_live"], include_built_ins=False)
         try:
